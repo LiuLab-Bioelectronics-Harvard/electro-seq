@@ -1,0 +1,127 @@
+---
+title: "continuous recording pseudo time"
+output: html_notebook
+---
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(SeuratData)
+library(cowplot)
+library(dplyr)
+library(data.table)
+
+# ephys_features <- read.csv(file = "./results/csv_data_filtered/Longterm_ephys_data_dpc.csv", sep = ",",
+#     header = TRUE, row.names = 1)
+
+ephys_features <- as.sparse(read.csv(file = "./results/csv_data_filtered/Organoid_ephys_data_dpc.csv", sep = ",",
+    header = TRUE, row.names = 1))
+
+
+
+pbmc <- CreateSeuratObject(counts = ephys_features)
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+
+```
+
+```{r}
+VlnPlot(pbmc, features = c("nCount_RNA"), ncol = 1,
+  log = TRUE, pt.size = 0) + NoLegend()
+
+pbmc <- FindVariableFeatures(pbmc) %>% ScaleData() %>% RunPCA(reduction.name = 'epca')
+ElbowPlot(pbmc, ndims = 50, reduction = "epca")
+```
+```{r}
+
+pbmc <- FindNeighbors(pbmc, reduction = "epca", dims.list = 1:20,assay = 'ephys',graph.name = 'ephys_')
+
+library(RColorBrewer)
+
+pbmc <- RunUMAP(pbmc, reduction = 'epca', dims = 1:15, 
+              reduction.name = 'ephys.umap', reduction.key = 'ephysUMAP_')
+
+pbmc <- FindClusters(pbmc, graph.name = "ephys_", algorithm = 4, verbose = FALSE)
+p1 <- DimPlot(pbmc, reduction = "ephys.umap",group.by = 'ephys__res.0.8', label = TRUE, label.size = 2.5, repel = TRUE,cols = brewer.pal(7, 'Blues')) + ggtitle("ephys")
+
+p2 <- DimPlot(pbmc, reduction = "ephys.umap",group.by = 'orig.ident', label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("ephys")#+ NoAxes()
+
+
+
+p1 + p2 & NoLegend() & theme(plot.title = element_text(hjust = 0.5))
+
+
+
+```
+
+```{r}
+p2
+
+```
+
+
+```{r}
+
+my.cds <- new_cell_data_set(as.matrix(pbmc@assays[["RNA"]]@counts,
+                                       row.names = row.names(pbmc@assays[["RNA"]])),
+                         cell_metadata = pbmc@meta.data,
+                         gene_metadata = data.frame(gene_short_name =  row.names(pbmc@assays[["RNA"]]),
+                                                    row.names = row.names(pbmc@assays[["RNA"]])))
+reducedDim(my.cds, type = "PCA") <- pbmc@reductions$epca@cell.embeddings 
+my.cds@preprocess_aux$prop_var_expl <- pbmc@reductions$epca@stdev
+plot_pc_variance_explained(my.cds)
+
+# Transfer Seurat UMAP embeddings
+my.cds@int_colData@listData$reducedDims$UMAP <- pbmc@reductions$ephys.umap@cell.embeddings
+#    plot_cells(my.cds)
+
+# Copy cluster info from Seurat
+my.cds@clusters$UMAP_so$clusters <- pbmc@meta.data$orig.ident
+
+my.cds <- cluster_cells(my.cds, reduction_method = "UMAP", resolution = 1e-3)
+
+# Fix from https://gitmemory.com/cole-trapnell-lab
+rownames(my.cds@principal_graph_aux$UMAP$dp_mst) <- NULL
+colnames(my.cds@int_colData@listData$reducedDims$UMAP) <- NULL
+
+DimPlot(pbmc, reduction = "ephys.umap")
+#DimPlot(my.so, reduction = "umap")
+plot_cells(my.cds, color_cells_by = "partition", group_label_size = 3.5)
+
+my.cds <- learn_graph(my.cds,close_loop = T,
+                   learn_graph_control = list(euclidean_distance_ratio = 2,
+                                              geodesic_distance_ratio = 2/3,
+                                              minimal_branch_len = 5))
+plot_cells(my.cds,
+           color_cells_by = "orig.ident",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+          group_label_size = 5,
+           cell_size = 3)
+
+my.cds <- order_cells(my.cds)
+plot_cells(my.cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+           cell_size = 3
+           )
+```
+
+
+
+```{r}
+joint_meta = data.frame(Idents(object = pbmc))
+joint_meta$ephys_pseudo = my.cds@principal_graph_aux$UMAP$pseudotime
+```
+
+```{r}
+
+write.csv(joint_meta,"./results/OrganoidRecordingPseudo.csv", row.names = TRUE)
+```

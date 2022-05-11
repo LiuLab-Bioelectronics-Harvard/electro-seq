@@ -1,0 +1,314 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(SeuratData)
+library(cowplot)
+library(dplyr)
+library(data.table)
+
+rna_counts <- as.sparse(read.csv(file = "./data/results/gene_data_dpc.csv", sep = ",",
+    header = TRUE, row.names = 1))
+ephys_features <- as.sparse(read.csv(file = "./data/results/ephys_data_dpc.csv", sep = ",",
+    header = TRUE, row.names = 1))
+
+
+colnames(ephys_features)<-colnames(rna_counts)
+
+
+pbmc <- CreateSeuratObject(counts = rna_counts,assay='RNA')
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+pbmc[["ephys"]] <- CreateAssayObject(counts = ephys_features)
+```
+
+```{r}
+VlnPlot(pbmc, features = c("nCount_RNA"), ncol = 1,
+  log = TRUE, pt.size = 0) + NoLegend()
+```
+```{r}
+DefaultAssay(pbmc) <- 'RNA'
+pbmc <- NormalizeData(pbmc, normalization.method ='CLR') %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(reduction.name = 'tpca')
+ElbowPlot(pbmc, ndims = 50, reduction = "tpca")
+DefaultAssay(pbmc) <- 'ephys'
+pbmc <- FindVariableFeatures(pbmc) %>% ScaleData() %>% RunPCA(reduction.name = 'epca')
+ElbowPlot(pbmc, ndims = 50, reduction = "epca")
+
+```
+
+
+```{r}
+# pbmc <- FindMultiModalNeighbors(
+#   pbmc, reduction.list = list("tpca", "epca"), 
+#   dims.list = list(1:10, 1:15), modality.weight.name = "RNA.weight",knn.range=20
+# )
+pbmc <- FindMultiModalNeighbors(
+  pbmc, reduction.list = list("tpca", "epca"), 
+  dims.list = list(1:10, 1:15), modality.weight.name = "RNA.weight",knn.range=20
+)
+pbmc <- FindNeighbors(pbmc, reduction ="tpca", dims.list =1:7,assay = 'RNA',graph.name = 'rna')
+
+pbmc <- FindNeighbors(pbmc, reduction = "epca", dims.list = 1:6,assay = 'ephys',graph.name = 'ephys_')
+
+```
+
+
+```{r}
+library(RColorBrewer)
+pbmc <- RunUMAP(pbmc, nn.name = "weighted.nn", reduction.name = "wnn.umap", reduction.key = "wnnUMAP_")
+pbmc <- RunUMAP(pbmc, reduction = 'tpca', dims = 1:5, assay = 'RNA', 
+              reduction.name = 'rna.umap', reduction.key = 'rnaUMAP_')
+pbmc <- RunUMAP(pbmc, reduction = 'epca', dims = 1:15, assay = 'ephys', 
+              reduction.name = 'ephys.umap', reduction.key = 'ephysUMAP_')
+
+gene_umap_ebd = data.matrix(read.csv(file = "./data/results/gene_umap.csv", sep = ",",
+    header = FALSE))
+colnames(gene_umap_ebd)<-colnames(pbmc[["rna.umap"]]@cell.embeddings)
+rownames(gene_umap_ebd)<-rownames(pbmc[["rna.umap"]]@cell.embeddings)
+
+typeof(pbmc[["rna.umap"]]@cell.embeddings)
+pbmc[["rna.umap"]]@cell.embeddings<- gene_umap_ebd
+
+ephys_umap_ebd = data.matrix(read.csv(file = "./data/results/ephys_umap.csv", sep = ",",
+    header = FALSE))
+colnames(ephys_umap_ebd)<-colnames(pbmc[["ephys.umap"]]@cell.embeddings)
+rownames(ephys_umap_ebd)<-rownames(pbmc[["ephys.umap"]]@cell.embeddings)
+
+typeof(pbmc[["ephys.umap"]]@cell.embeddings)
+pbmc[["ephys.umap"]]@cell.embeddings<- ephys_umap_ebd
+
+pbmc <- FindClusters(pbmc, graph.name = "rna", algorithm = 4, resolution = 1, verbose = FALSE)
+p1 <- DimPlot(pbmc, reduction = "rna.umap",group.by = 'rna_res.1', label = TRUE, label.size = 2.5, repel = TRUE,cols = brewer.pal(4, 'Reds')) + ggtitle("RNA")
+
+pbmc <- FindClusters(pbmc, graph.name = "ephys_", algorithm = 4, resolution = 1, verbose = FALSE)
+p2 <- DimPlot(pbmc, reduction = "ephys.umap",group.by = 'ephys__res.1', label = TRUE, label.size = 2.5, repel = TRUE,cols = brewer.pal(4, 'Blues')) + ggtitle("ephys")
+
+pbmc <- FindClusters(pbmc, graph.name = "wsnn", algorithm = 4, resolution = 1.5, verbose = FALSE)
+p3 <- DimPlot(pbmc, reduction = "wnn.umap",group.by = 'wsnn_res.1.5', label = TRUE, label.size = 2.5, repel = TRUE,cols = brewer.pal(4, 'Set3')) + ggtitle("WNN")
+
+
+
+
+p4 <- DimPlot(pbmc, reduction = "rna.umap",group.by = 'orig.ident', label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("gene")#+ NoAxes()
+p5 <- DimPlot(pbmc, reduction = "ephys.umap",group.by = 'orig.ident', label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("ephys")#+ NoAxes()
+p6 <- DimPlot(pbmc, reduction = "wnn.umap",group.by = 'orig.ident', label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("co-clustering")#+ NoAxes()
+
+
+p1 + p2 + p3 & NoLegend() & theme(plot.title = element_text(hjust = 0.5))
+p4 + p5 + p6 & NoLegend() & theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+```{r}
+pbmc <- RenameIdents(object = pbmc, `1` = "CMJ 3", `2` = "CMJ 4", `3` = "CMJ 2", `4` = "CMJ 1")
+p1 <- DimPlot(pbmc, reduction = "rna.umap", label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("RNA")
+p2 <- DimPlot(pbmc, reduction = "ephys.umap", label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("ephys")
+p3 <- DimPlot(pbmc, reduction = "wnn.umap", label = TRUE, label.size = 2.5, repel = TRUE) + ggtitle("WNN")
+p1 + p2 + p3 & NoLegend() & theme(plot.title = element_text(hjust = 0.5))
+p4 + p5 + p6 & NoLegend() & theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+VlnPlot(pbmc, features = "RNA.weight", sort = TRUE, pt.size = 0.1) +
+NoLegend()
+VlnPlot(pbmc, features = "RNA.weight", group.by = 'orig.ident',sort = TRUE, pt.size = 0.1) +
+NoLegend()
+```
+```{r}
+library(SeuratWrappers)
+library(monocle3)
+my.cds <- new_cell_data_set(as.matrix(pbmc@assays[["RNA"]]@counts,
+                                       row.names = row.names(pbmc@assays[["RNA"]])),
+                         cell_metadata = pbmc@meta.data,
+                         gene_metadata = data.frame(gene_short_name =  row.names(pbmc@assays[["RNA"]]),
+                                                    row.names = row.names(pbmc@assays[["RNA"]])))
+
+```
+
+
+```{r}
+reducedDim(my.cds, type = "PCA") <- pbmc@reductions$tpca@cell.embeddings 
+my.cds@preprocess_aux$prop_var_expl <- pbmc@reductions$tpca@stdev
+plot_pc_variance_explained(my.cds)
+
+# Transfer Seurat UMAP embeddings
+my.cds@int_colData@listData$reducedDims$UMAP <- pbmc@reductions$wnn.umap@cell.embeddings
+#    plot_cells(my.cds)
+
+# Copy cluster info from Seurat
+my.cds@clusters$UMAP_so$clusters <- pbmc@meta.data$orig.ident
+
+my.cds <- cluster_cells(my.cds, reduction_method = "UMAP", resolution = 1e-3)
+
+# Fix from https://gitmemory.com/cole-trapnell-lab
+rownames(my.cds@principal_graph_aux$UMAP$dp_mst) <- NULL
+colnames(my.cds@int_colData@listData$reducedDims$UMAP) <- NULL
+
+DimPlot(pbmc, reduction = "wnn.umap")
+#DimPlot(my.so, reduction = "umap")
+plot_cells(my.cds, color_cells_by = "partition", group_label_size = 3.5)
+```
+
+```{r}
+my.cds <- learn_graph(my.cds,close_loop = T,
+                   learn_graph_control = list(euclidean_distance_ratio = 2,
+                                              geodesic_distance_ratio = 2/3,
+                                              minimal_branch_len = 5))
+plot_cells(my.cds,
+           color_cells_by = "orig.ident",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           cell_size = 1)
+```
+
+```{r}
+my.cds <- order_cells(my.cds)
+plot_cells(my.cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+           cell_size = 3
+           )
+```
+
+
+```{r}
+
+my.cds_gene <- new_cell_data_set(as.matrix(pbmc@assays[["RNA"]]@counts,
+                                       row.names = row.names(pbmc@assays[["RNA"]])),
+                         cell_metadata = pbmc@meta.data,
+                         gene_metadata = data.frame(gene_short_name =  row.names(pbmc@assays[["RNA"]]),
+                                                    row.names = row.names(pbmc@assays[["RNA"]])))
+reducedDim(my.cds_gene, type = "PCA") <- pbmc@reductions$tpca@cell.embeddings 
+my.cds_gene@preprocess_aux$prop_var_expl <- pbmc@reductions$tpca@stdev
+plot_pc_variance_explained(my.cds_gene)
+
+# Transfer Seurat UMAP embeddings
+my.cds_gene@int_colData@listData$reducedDims$UMAP <- pbmc@reductions$rna.umap@cell.embeddings
+#    plot_cells(my.cds)
+
+# Copy cluster info from Seurat
+my.cds_gene@clusters$UMAP_so$clusters <- pbmc@meta.data$orig.ident
+
+my.cds_gene <- cluster_cells(my.cds_gene, reduction_method = "UMAP", resolution = 1e-3)
+
+# Fix from https://gitmemory.com/cole-trapnell-lab
+rownames(my.cds_gene@principal_graph_aux$UMAP$dp_mst) <- NULL
+colnames(my.cds_gene@int_colData@listData$reducedDims$UMAP) <- NULL
+
+DimPlot(pbmc, reduction = "wnn.umap")
+#DimPlot(my.so, reduction = "umap")
+plot_cells(my.cds_gene, color_cells_by = "partition", group_label_size = 3.5)
+
+my.cds_gene <- learn_graph(my.cds_gene,close_loop = T,
+                   learn_graph_control = list(euclidean_distance_ratio = 2,
+                                              geodesic_distance_ratio = 2/3,
+                                              minimal_branch_len = 5))
+plot_cells(my.cds_gene,
+           color_cells_by = "orig.ident",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           cell_size = 1)
+
+my.cds_gene <- order_cells(my.cds_gene)
+plot_cells(my.cds_gene,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+           cell_size = 3
+           )
+```
+
+
+
+
+```{r}
+
+my.cds_ephys <- new_cell_data_set(as.matrix(pbmc@assays[["ephys"]]@counts,
+                                       row.names = row.names(pbmc@assays[["ephys"]])),
+                         cell_metadata = pbmc@meta.data,
+                         gene_metadata = data.frame(gene_short_name =  row.names(pbmc@assays[["ephys"]]),
+                                                    row.names = row.names(pbmc@assays[["ephys"]])))
+reducedDim(my.cds_ephys, type = "PCA") <- pbmc@reductions$epca@cell.embeddings 
+my.cds_ephys@preprocess_aux$prop_var_expl <- pbmc@reductions$epca@stdev
+plot_pc_variance_explained(my.cds_ephys)
+
+# Transfer Seurat UMAP embeddings
+my.cds_ephys@int_colData@listData$reducedDims$UMAP <- pbmc@reductions$ephys.umap@cell.embeddings
+#    plot_cells(my.cds)
+
+# Copy cluster info from Seurat
+my.cds_ephys@clusters$UMAP_so$clusters <- pbmc@meta.data$orig.ident
+
+my.cds_ephys <- cluster_cells(my.cds_ephys, reduction_method = "UMAP", resolution = 1e-3)
+
+# Fix from https://gitmemory.com/cole-trapnell-lab
+rownames(my.cds_ephys@principal_graph_aux$UMAP$dp_mst) <- NULL
+colnames(my.cds_ephys@int_colData@listData$reducedDims$UMAP) <- NULL
+
+DimPlot(pbmc, reduction = "wnn.umap")
+#DimPlot(my.so, reduction = "umap")
+plot_cells(my.cds_ephys, color_cells_by = "partition", group_label_size = 3.5)
+
+my.cds_ephys <- learn_graph(my.cds_ephys,close_loop = T,
+                   learn_graph_control = list(euclidean_distance_ratio = 2,
+                                              geodesic_distance_ratio = 2/3,
+                                              minimal_branch_len = 5))
+plot_cells(my.cds_ephys,
+           color_cells_by = "orig.ident",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           cell_size = 1)
+
+my.cds_ephys <- order_cells(my.cds_ephys)
+plot_cells(my.cds_ephys,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+           cell_size = 3
+           )
+```
+
+
+
+
+```{r}
+
+write.csv(data.frame(pbmc@reductions$wnn.umap@cell.embeddings),"./data/results/wnn_embeddins.csv", row.names = TRUE)
+```
+
+
+```{r}
+
+write.csv(data.frame(Idents(object = pbmc)),"./data/results/wnn_join_clustering_label.csv", row.names = TRUE)
+```
+
+```{r}
+joint_meta = data.frame(Idents(object = pbmc))
+joint_meta$ephys_pseudo = my.cds_ephys@principal_graph_aux$UMAP$pseudotime
+joint_meta$gene_pseudo = my.cds_gene@principal_graph_aux$UMAP$pseudotime
+joint_meta$wnn_pseudo = my.cds_wnn@principal_graph_aux$UMAP$pseudotime  
+```
+
+```{r}
+
+write.csv(joint_meta,"./data/results/joint_meta.csv", row.names = TRUE)
+```
+
+
+

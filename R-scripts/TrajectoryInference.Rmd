@@ -1,0 +1,119 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+#TSCAN
+library(TSCAN)
+library(data.table)
+library(ggplot2)
+library(Seurat)
+library(SeuratData)
+rna_counts <- read.csv(file = "./results/csv_data_filtered/gene_data.csv", sep = ",", 
+    header = TRUE, row.names = 1)
+
+pbmc <- CreateSeuratObject(counts = as.sparse(rna_counts),assay='RNA')
+
+tscan_data <- preprocess(rna_counts,minexpr_value = -1)
+tscan_cluster <- exprmclust(tscan_data,clusternum = 2:5)
+plotmclust(tscan_cluster,show_cell_names = F)
+ggplot(data = data.frame(x = tscan_cluster[["pcareduceres"]][,1],
+                         y = tscan_cluster[["pcareduceres"]][,2],
+                         day = pbmc$orig.ident),
+       aes(x=x,y=y,color = day))+
+  geom_point()
+
+
+
+rna_counts <- as.sparse(read.csv(file = "./results/csv_data_filtered/gene_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+# Load in the ADT UMI matrix
+ephys_features <- as.sparse(read.csv(file = "./results/csv_data_filtered/ephys_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+colnames(ephys_features)<-colnames(rna_counts)
+```
+
+```{r}
+#TSCAN
+library(TSCAN)
+library(data.table)
+library(ggplot2)
+library(Seurat)
+library(SeuratData)
+#monocle3
+library(monocle3)
+
+rna_counts <- as.sparse(read.csv(file = "./results/csv_data_filtered/gene_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+# Load in the ADT UMI matrix
+ephys_features <- as.sparse(read.csv(file = "./results/csv_data_filtered/ephys_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+colnames(ephys_features)<-colnames(rna_counts)
+
+
+pbmc <- CreateSeuratObject(counts = rna_counts,assay='RNA')
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+pbmc[["ephys"]] <- CreateAssayObject(counts = ephys_features)
+
+
+cds <- new_cell_data_set(as.matrix(pbmc@assays[["RNA"]]@counts,
+                                   row.names = row.names(pbmc@assays[["RNA"]])),
+                         cell_metadata = pbmc@meta.data,
+                         gene_metadata = data.frame(gene_short_name =  row.names(pbmc@assays[["RNA"]]),
+                                                    row.names = row.names(pbmc@assays[["RNA"]])))
+cds <- preprocess_cds(cds, num_dim = 100)
+cds <- reduce_dimension(cds,max_components = 2,
+                        umap.min_dist = 0.5)
+plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "stage")
+cds <- cluster_cells(cds)
+cds <- learn_graph(cds,close_loop = T,
+                   learn_graph_control = list(euclidean_distance_ratio = 2,
+                                              geodesic_distance_ratio = 2/3,
+                                              minimal_branch_len = 10))
+plot_cells(cds,
+           color_cells_by = "stage",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+cds <- order_cells(cds)
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5)
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           show_trajectory_graph = F,
+           cell_size = 0.7)
+plot_cells(cds,
+           color_cells_by = "stage",
+           show_trajectory_graph = F,
+           cell_size = 0.7)
+tmp_list <- c("SOX2","NANOG","POU5F1","MIXL1","EOMES","FOXA2","SOX17","MESP1",
+              "TBX5","GATA4","HAND1","TBX1","HAND1","NKX2-5","MEF2C",'COL1A1',
+              "TAGLN",'CNN1','CDH5','ERG',"PECAM1","CALD1",'TNNT2','NPPA',"NPPB",
+              "ATP2A2","PLN","MYH6","MYL7","TNNI1",'MYH7','MYL2',"TNNI3")
+tmp_list <- c("HAND2", "GATA4", "TNNT2", "HCN4", "MYH6", "MYL7","MYH7",'NPPB')
+tmp_list <- c('TRPM4', 'VDAC3', 'VDAC2', 'SLC8A1', 'KCNK3', 'KCNQ1', 'KCND2', 'KCNH2')
+tmp_list <- c('ATP2A2', "RYR2", "CACNA1D", 'CACNA1C', 'PLN', 'CAV3', "BIN1", "TRDN")
+tmp_list <- intersect(tmp_list, row.names(seurat_obj@assays[["RNA"]]))
+tmp_list <- c("GATA4","TNNI1","TNNT2","HAND2","HCN4","MYH6","MYH7","MYL7","ATP2A2","RYR2","SLC8A1","KCNQ1")
+plot_genes_in_pseudotime(cds[rowData(cds)$gene_short_name %in% tmp_list,],
+                         color_cells_by="stage",
+                         min_expr=0.5,ncol = 4,nrow = 3)
+
+
+
+rna_counts <- as.sparse(read.csv(file = "./results/csv_data_filtered/gene_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+# Load in the ADT UMI matrix
+ephys_features <- as.sparse(read.csv(file = "./results/csv_data_filtered/ephys_data.csv", sep = ",", 
+    header = TRUE, row.names = 1))
+colnames(ephys_features)<-colnames(rna_counts)
+```
